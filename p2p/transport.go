@@ -288,6 +288,7 @@ func (mt *MultiplexTransport) acceptPeers() {
 	for {
 		c, err := mt.listener.Accept()
 		if err != nil {
+			fmt.Println("error accepting connection", err)
 			// If Close() has been called, silently exit.
 			select {
 			case _, ok := <-mt.closec:
@@ -299,8 +300,11 @@ func (mt *MultiplexTransport) acceptPeers() {
 			}
 
 			mt.acceptc <- accept{err: err}
+			fmt.Println("returning from acceptPeers")
+
 			return
 		}
+		fmt.Println("successfully accepted")
 
 		// Connection upgrade and filtering should be asynchronous to avoid
 		// Head-of-line blocking[0].
