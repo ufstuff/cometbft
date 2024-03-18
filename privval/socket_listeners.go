@@ -1,6 +1,7 @@
 package privval
 
 import (
+	"fmt"
 	"net"
 	"time"
 
@@ -63,6 +64,7 @@ func NewTCPListener(ln net.Listener, secretConnKey ed25519.PrivKey) *TCPListener
 
 // Accept implements net.Listener.
 func (ln *TCPListener) Accept() (net.Conn, error) {
+	fmt.Println("in tcp listener")
 	deadline := time.Now().Add(ln.timeoutAccept)
 	err := ln.SetDeadline(deadline)
 	if err != nil {
@@ -125,6 +127,8 @@ func NewUnixListener(ln net.Listener) *UnixListener {
 
 // Accept implements net.Listener.
 func (ln *UnixListener) Accept() (net.Conn, error) {
+	fmt.Println("in unix listener")
+
 	deadline := time.Now().Add(ln.timeoutAccept)
 	err := ln.SetDeadline(deadline)
 	if err != nil {
