@@ -22,12 +22,12 @@ import (
 	"github.com/cometbft/cometbft/internal/fail"
 	cmtos "github.com/cometbft/cometbft/internal/os"
 	"github.com/cometbft/cometbft/internal/service"
-	sm "github.com/cometbft/cometbft/internal/state"
 	cmtsync "github.com/cometbft/cometbft/internal/sync"
 	cmtjson "github.com/cometbft/cometbft/libs/json"
 	"github.com/cometbft/cometbft/libs/log"
 	cmtmath "github.com/cometbft/cometbft/libs/math"
 	"github.com/cometbft/cometbft/p2p"
+	sm "github.com/cometbft/cometbft/state"
 	"github.com/cometbft/cometbft/types"
 	cmterrors "github.com/cometbft/cometbft/types/errors"
 	cmttime "github.com/cometbft/cometbft/types/time"
@@ -434,7 +434,7 @@ func (cs *State) OnStop() {
 	// WAL is stopped in receiveRoutine.
 }
 
-// Wait waits for the the main routine to return.
+// Wait waits for the main routine to return.
 // NOTE: be sure to Stop() the event switch and drain
 // any event channels or this may deadlock.
 func (cs *State) Wait() {
@@ -886,7 +886,7 @@ func (cs *State) handleMsg(mi msgInfo) {
 		// if the proposal is complete, we'll enterPrevote or tryFinalizeCommit
 		added, err = cs.addProposalBlockPart(msg, peerID)
 
-		// We unlock here to yield to any routines that need to read the the RoundState.
+		// We unlock here to yield to any routines that need to read the RoundState.
 		// Previously, this code held the lock from the point at which the final block
 		// part was received until the block executed against the application.
 		// This prevented the reactor from being able to retrieve the most updated
@@ -1037,7 +1037,7 @@ func (cs *State) handleTxsAvailable() {
 
 // Enter: `timeoutNewHeight` by startTime (commitTime+timeoutCommit),
 //
-//	or, if SkipTimeoutCommit==true, after receiving all precommits from (height,round-1)
+//	or, if TimeoutCommit==0, after receiving all precommits from (height,round-1)
 //
 // Enter: `timeoutPrecommits` after any +2/3 precommits from (height,round-1)
 // Enter: +2/3 precommits for nil at (height,round-1)
@@ -1317,13 +1317,14 @@ func (cs *State) createProposalBlock(ctx context.Context) (*types.Block, error) 
 	return ret, nil
 }
 
-// Enter: `timeoutPropose` after entering Propose.
-// Enter: proposal block and POL is ready.
-// If we received a valid proposal within this round and we are not locked on a block,
-// we will prevote for block.
-// Otherwise, if we receive a valid proposal that matches the block we are
-// locked on or matches a block that received a POL in a round later than our
-// locked round, prevote for the proposal, otherwise vote nil.
+// Enter: isProposalComplete() and Step <= RoundStepPropose.
+// Enter: `timeout_propose` (timeout of RoundStepPropose type) expires.
+//
+// If we received a valid proposal and the associated proposed block within
+// this round and: (i) we are not locked on a block, or we are locked on the
+// proposed block, or (ii) the proposed block received a POL in a round greater
+// or equal than our locked round, we will prevote for the poroposed block ID.
+// Otherwise, we prevote nil.
 func (cs *State) enterPrevote(height int64, round int32) {
 	logger := cs.Logger.With("height", height, "round", round)
 
@@ -1364,18 +1365,21 @@ func (cs *State) proposalIsTimely() bool {
 	return cs.Proposal.IsTimely(cs.ProposalReceiveTime, sp)
 }
 
+// Implements doPrevote. Called by enterPrevote(height, round) provided that
+// round == cs.Round, height == cs.Height, and cs.Step <= // RoundStepPropose.
 func (cs *State) defaultDoPrevote(height int64, round int32) {
 	logger := cs.Logger.With("height", height, "round", round)
 
-	// We did not receive a proposal within this round. (and thus executing this from a timeout)
-	if cs.Proposal == nil || cs.ProposalBlock == nil {
-		logger.Debug("prevote step: Proposal or ProposalBlock is nil; prevoting nil")
+	// We did not receive a valid proposal for this round (and thus executing this from a timeout).
+	if cs.Proposal == nil {
+		logger.Debug("prevote step: did not receive a valid Proposal; prevoting nil")
 		cs.signAddVote(types.PrevoteType, nil, types.PartSetHeader{}, nil)
 		return
 	}
 
-	if cs.Proposal == nil {
-		logger.Debug("prevote step: did not receive proposal; prevoting nil")
+	// We did not (fully) receive the proposed block (and thus executing this from a timeout).
+	if cs.ProposalBlock == nil {
+		logger.Debug("prevote step: did not receive the ProposalBlock; prevoting nil")
 		cs.signAddVote(types.PrevoteType, nil, types.PartSetHeader{}, nil)
 		return
 	}
@@ -1896,8 +1900,9 @@ func (cs *State) finalizeCommit(height int64) {
 	stateCopy := cs.state.Copy()
 
 	// Execute and commit the block, update and save the state, and update the mempool.
+	// We use apply verified block here because we have verified the block in this function already.
 	// NOTE The block.AppHash won't reflect these txs until the next block.
-	stateCopy, err := cs.blockExec.ApplyBlock(
+	stateCopy, err := cs.blockExec.ApplyVerifiedBlock(
 		stateCopy,
 		types.BlockID{
 			Hash:          block.Hash(),
@@ -2290,7 +2295,7 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID) (added bool, err error
 		cs.evsw.FireEvent(types.EventVote, vote)
 
 		// if we can skip timeoutCommit and have all the votes now,
-		if cs.config.SkipTimeoutCommit && cs.LastCommit.HasAll() {
+		if cs.config.TimeoutCommit == 0 && cs.LastCommit.HasAll() {
 			// go straight to new round (skip timeout commit)
 			// cs.scheduleTimeout(time.Duration(0), cs.Height, 0, cstypes.RoundStepNewHeight)
 			cs.enterNewRound(cs.Height, 0)
@@ -2445,7 +2450,7 @@ func (cs *State) addVote(vote *types.Vote, peerID p2p.ID) (added bool, err error
 
 			if !blockID.IsNil() {
 				cs.enterCommit(height, vote.Round)
-				if cs.config.SkipTimeoutCommit && precommits.HasAll() {
+				if cs.config.TimeoutCommit == 0 && precommits.HasAll() {
 					cs.enterNewRound(cs.Height, 0)
 				}
 			} else {

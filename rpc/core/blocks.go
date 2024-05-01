@@ -4,11 +4,11 @@ import (
 	"sort"
 
 	cmtquery "github.com/cometbft/cometbft/internal/pubsub/query"
-	blockidxnull "github.com/cometbft/cometbft/internal/state/indexer/block/null"
 	"github.com/cometbft/cometbft/libs/bytes"
 	cmtmath "github.com/cometbft/cometbft/libs/math"
 	ctypes "github.com/cometbft/cometbft/rpc/core/types"
 	rpctypes "github.com/cometbft/cometbft/rpc/jsonrpc/types"
+	blockidxnull "github.com/cometbft/cometbft/state/indexer/block/null"
 	"github.com/cometbft/cometbft/types"
 )
 
@@ -221,10 +221,10 @@ func (env *Environment) BlockSearch(
 
 	// sort results (must be done before pagination)
 	switch orderBy {
-	case "desc", "":
+	case Descending, "":
 		sort.Slice(results, func(i, j int) bool { return results[i] > results[j] })
 
-	case "asc":
+	case Ascending:
 		sort.Slice(results, func(i, j int) bool { return results[i] < results[j] })
 
 	default:

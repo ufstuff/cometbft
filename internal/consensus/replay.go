@@ -12,9 +12,9 @@ import (
 
 	abci "github.com/cometbft/cometbft/abci/types"
 	"github.com/cometbft/cometbft/crypto/merkle"
-	sm "github.com/cometbft/cometbft/internal/state"
 	"github.com/cometbft/cometbft/libs/log"
 	"github.com/cometbft/cometbft/proxy"
+	sm "github.com/cometbft/cometbft/state"
 	"github.com/cometbft/cometbft/types"
 )
 
@@ -304,6 +304,10 @@ func (h *Handshaker) ReplayBlocks(
 	if appBlockHeight == 0 {
 		validators := make([]*types.Validator, len(h.genDoc.Validators))
 		for i, val := range h.genDoc.Validators {
+			// Ensure that the public key type is supported.
+			if _, ok := types.ABCIPubKeyTypesToNames[val.PubKey.Type()]; !ok {
+				return nil, fmt.Errorf("unsupported public key type %s (validator name: %s)", val.PubKey.Type(), val.Name)
+			}
 			validators[i] = types.NewValidator(val.PubKey, val.Power)
 		}
 		validatorSet := types.NewValidatorSet(validators)

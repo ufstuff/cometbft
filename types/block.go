@@ -44,10 +44,11 @@ const (
 type Block struct {
 	mtx cmtsync.Mutex
 
-	Header     `json:"header"`
-	Data       `json:"data"`
-	Evidence   EvidenceData `json:"evidence"`
-	LastCommit *Commit      `json:"last_commit"`
+	verifiedHash cmtbytes.HexBytes // Verified block hash (not included in the struct hash)
+	Header       `json:"header"`
+	Data         `json:"data"`
+	Evidence     EvidenceData `json:"evidence"`
+	LastCommit   *Commit      `json:"last_commit"`
 }
 
 // ValidateBasic performs basic validation that doesn't involve state data.
@@ -131,8 +132,13 @@ func (b *Block) Hash() cmtbytes.HexBytes {
 	if b.LastCommit == nil {
 		return nil
 	}
+	if b.verifiedHash != nil {
+		return b.verifiedHash
+	}
 	b.fillHeader()
-	return b.Header.Hash()
+	hash := b.Header.Hash()
+	b.verifiedHash = hash
+	return hash
 }
 
 // MakePartSet returns a PartSet containing parts of a serialized block.
@@ -587,9 +593,9 @@ const (
 const (
 	// Max size of commit without any commitSigs -> 82 for BlockID, 8 for Height, 4 for Round.
 	MaxCommitOverheadBytes int64 = 94
-	// Commit sig size is made up of 64 bytes for the signature, 20 bytes for the address,
+	// Commit sig size is made up of 96 bytes for the signature, 20 bytes for the address,
 	// 1 byte for the flag and 14 bytes for the timestamp.
-	MaxCommitSigBytes int64 = 109
+	MaxCommitSigBytes int64 = 131 + 10 // where's the 10 from?
 )
 
 // CommitSig is a part of the Vote included in a Commit.
@@ -601,8 +607,9 @@ type CommitSig struct {
 }
 
 func MaxCommitBytes(valCount int) int64 {
+	// protoEncodingOverhead represents the overhead in bytes when encoding a protocol buffer message.
+	const protoEncodingOverhead int64 = 3
 	// From the repeated commit sig field
-	var protoEncodingOverhead int64 = 2
 	return MaxCommitOverheadBytes + ((MaxCommitSigBytes + protoEncodingOverhead) * int64(valCount))
 }
 
@@ -1380,7 +1387,7 @@ func DataFromProto(dp *cmtproto.Data) (Data, error) {
 
 // -----------------------------------------------------------------------------
 
-// EvidenceData contains any evidence of malicious wrong-doing by validators.
+// EvidenceData contains a list of evidence committed by a validator.
 type EvidenceData struct {
 	Evidence EvidenceList `json:"evidence"`
 
